@@ -1,0 +1,17 @@
+.env
+.rag/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# 虚拟环境（本机这份是空的，实际用 conda python 跑）
+.venv/
+venv/
+
+# IDE（PyCharm 自带的 .idea/.gitignore 只挡得住 workspace.xml）
+.idea/
+
+# 本地临时产物
+地址*.txt
+demo_result.txt

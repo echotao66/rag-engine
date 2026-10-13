@@ -1,0 +1,10 @@
+numpy>=1.24
+openai>=1.0
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9
+pytest>=8.0
+# 向量存储后端：默认内存 JSON，设 RAG_STORE=chroma 启用 chromadb（HNSW 持久化）
+chromadb>=1.5
+# 可选：真语义 embedding / cross-encoder 重排
+# sentence-transformers>=3.0

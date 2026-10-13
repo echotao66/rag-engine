@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>私有知识库问答助手</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --border:#e3e6ea; --accent:#3b82f6; --text:#1f2937; --muted:#6b7280; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; }
+  header { background:var(--panel); border-bottom:1px solid var(--border); padding:12px 20px; display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:16px; font-weight:600; }
+  .badge { font-size:12px; padding:2px 8px; border-radius:999px; background:#eef2ff; color:#4338ca; }
+  .badge.off { background:#fee2e2; color:#b91c1c; }
+  .spacer { flex:1; }
+  button { border:1px solid var(--border); background:var(--panel); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:13px; }
+  button:hover { border-color:var(--accent); color:var(--accent); }
+  .btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .btn-primary:hover { color:#fff; background:#2563eb; }
+  main { flex:1; display:flex; min-height:0; }
+  aside { width:320px; background:var(--panel); border-right:1px solid var(--border); padding:16px; overflow-y:auto; display:flex; flex-direction:column; gap:14px; }
+  aside h2 { font-size:13px; color:var(--muted); font-weight:600; }
+  .kb-upload { display:flex; flex-direction:column; gap:8px; }
+  textarea, input[type=text] { border:1px solid var(--border); border-radius:6px; padding:8px; font-size:13px; resize:vertical; font-family:inherit; }
+  .doc-list { list-style:none; font-size:12px; display:flex; flex-direction:column; gap:6px; }
+  .doc-list li { padding:6px 8px; background:var(--bg); border-radius:6px; color:var(--muted); }
+  .chat { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .messages { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:14px; }
+  .msg { max-width:720px; }
+  .msg.user { align-self:flex-end; }
+  .msg.user .bubble { background:var(--accent); color:#fff; }
+  .bubble { padding:10px 14px; border-radius:12px; background:var(--panel); border:1px solid var(--border); font-size:14px; line-height:1.6; white-space:pre-wrap; }
+  .meta { font-size:12px; color:var(--muted); margin:4px 0; }
+  .sources { margin-top:8px; font-size:12px; }
+  .sources h4 { color:var(--muted); font-weight:600; margin-bottom:4px; }
+  .source { padding:6px 8px; border-left:3px solid var(--accent); background:var(--bg); border-radius:4px; margin-bottom:4px; color:var(--muted); }
+  .source.cited { border-left-color:#10b981; color:var(--text); }
+  sup.cite { color:var(--accent); cursor:pointer; font-weight:600; }
+  .inputbar { display:flex; gap:8px; padding:16px; border-top:1px solid var(--border); background:var(--panel); }
+  .inputbar input { flex:1; border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-size:14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📚 私有知识库问答助手</h1>
+  <span id="llmBadge" class="badge">LLM 检测中…</span>
+  <div class="spacer"></div>
+  <button onclick="clearKB()">清空知识库</button>
+</header>
+<main>
+  <aside>
+    <h2>📥 导入文档</h2>
+    <div class="kb-upload">
+      <input type="file" id="fileInput" accept=".txt,.md,.markdown">
+      <button class="btn-primary" onclick="uploadFile()">上传文件</button>
+      <div style="text-align:center;color:var(--muted);font-size:12px;">或</div>
+      <input type="text" id="titleInput" placeholder="文档标题（可选）">
+      <textarea id="textInput" rows="5" placeholder="粘贴文本内容…"></textarea>
+      <button class="btn-primary" onclick="ingestText()">导入文本</button>
+    </div>
+    <h2>📊 知识库</h2>
+    <div id="kbStats" class="meta">—</div>
+    <ul id="docList" class="doc-list"></ul>
+  </aside>
+  <section class="chat">
+    <div id="messages" class="messages">
+      <div class="msg"><div class="bubble">你好！先在左侧导入文档，然后直接提问。我会检索知识库、给出带引用出处的回答，并支持多轮追问。</div></div>
+    </div>
+    <div class="inputbar">
+      <input type="text" id="input" placeholder="输入问题，回车发送…" onkeydown="if(event.key==='Enter')send()">
+      <button class="btn-primary" onclick="send()">发送</button>
+    </div>
+  </section>
+</main>
+<script>
+let currentSources = [];
+
+function $(id){ return document.getElementById(id); }
+
+async function refreshKB(){
+  const r = await fetch('/api/kb');
+  const d = await r.json();
+  $('llmBadge').textContent = d.llm_ready ? 'LLM 已就绪' : 'LLM 未配置';
+  $('llmBadge').className = 'badge' + (d.llm_ready ? '' : ' off');
+  $('kbStats').textContent = d.docs + ' 篇文档 · ' + d.chunks + ' 个片段';
+  $('docList').innerHTML = (d.doc_list||[]).map(x => '<li>' + esc(x.doc_id) + ' · ' + x.chunks + ' 片段</li>').join('');
+}
+
+function esc(s){ return (s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function uploadFile(){
+  const f = $('fileInput').files[0];
+  if(!f){ alert('请先选择文件'); return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  const r = await fetch('/api/ingest/file', {method:'POST', body:fd});
+  const d = await r.json();
+  addSystem('已上传 ' + f.name + '（' + d.chunks + ' 个片段）');
+  refreshKB();
+  $('fileInput').value = '';
+}
+
+async function ingestText(){
+  const text = $('textInput').value.trim();
+  if(!text){ alert('请输入文本'); return; }
+  const r = await fetch('/api/ingest/text', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({text: text, title: $('titleInput').value.trim()})
+  });
+  const d = await r.json();
+  addSystem('已导入（' + d.chunks + ' 个片段）');
+  $('textInput').value = '';
+  $('titleInput').value = '';
+  refreshKB();
+}
+
+async function clearKB(){
+  if(!confirm('确定清空整个知识库？')) return;
+  await fetch('/api/clear', {method:'POST'});
+  addSystem('知识库已清空');
+  refreshKB();
+}
+
+function addSystem(text){
+  const box = document.createElement('div');
+  box.className = 'msg';
+  box.innerHTML = '<div class="bubble" style="color:var(--muted);font-size:13px;">' + esc(text) + '</div>';
+  $('messages').appendChild(box);
+  box.scrollIntoView();
+}
+
+function addUser(text){
+  const box = document.createElement('div');
+  box.className = 'msg user';
+  box.innerHTML = '<div class="bubble">' + esc(text) + '</div>';
+  $('messages').appendChild(box);
+  box.scrollIntoView();
+}
+
+function renderAnswer(bubble, answer, citations){
+  bubble.innerHTML = esc(answer).replace(/\[(\d+)\]/g, (m, n) => '<sup class="cite">[' + n + ']</sup>');
+  if(currentSources.length){
+    const srcBox = document.createElement('div');
+    srcBox.className = 'sources';
+    srcBox.innerHTML = '<h4>📎 引用来源</h4>' + currentSources.map((s, i) => {
+      const cited = citations.includes(i+1) ? ' cited' : '';
+      const label = esc(s.doc_id || (s.metadata && s.metadata.source) || '未命名');
+      return '<div class="source' + cited + '"><b>[' + (i+1) + ']</b> ' + label + ' · ' + esc(s.text).slice(0,80) + '…</div>';
+    }).join('');
+    bubble.parentElement.appendChild(srcBox);
+  }
+}
+
+function send(){
+  const q = $('input').value.trim();
+  if(!q) return;
+  addUser(q);
+  $('input').value = '';
+
+  const box = document.createElement('div');
+  box.className = 'msg';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  box.appendChild(bubble);
+  $('messages').appendChild(box);
+
+  currentSources = [];
+  let raw = '';
+  const es = new EventSource('/api/chat/stream?message=' + encodeURIComponent(q));
+
+  es.addEventListener('retrieved', e => {
+    const d = JSON.parse(e.data);
+    currentSources = d.chunks || [];
+    if(d.search_query && d.search_query !== q){
+      const m = document.createElement('div');
+      m.className = 'meta';
+      m.textContent = '🔍 检索改写：' + d.search_query;
+      box.insertBefore(m, bubble);
+    }
+  });
+  es.addEventListener('delta', e => {
+    const d = JSON.parse(e.data);
+    raw += d.text;
+    bubble.textContent = raw;
+    bubble.scrollIntoView();
+  });
+  es.addEventListener('done', e => {
+    const d = JSON.parse(e.data);
+    renderAnswer(bubble, d.answer || raw, d.citations || []);
+    es.close();
+    box.scrollIntoView();
+  });
+  es.addEventListener('error', e => {
+    es.close();
+    if(!raw) bubble.textContent = '⚠️ 连接中断或出错';
+  });
+}
+
+refreshKB();
+</script>
+</body>
+</html>
